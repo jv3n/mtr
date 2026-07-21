@@ -1,6 +1,7 @@
 package mtr
 
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.post
@@ -9,7 +10,11 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.time.Instant
 
@@ -38,14 +43,20 @@ class TelegramNotifier(
     override suspend fun send(message: String) {
         println("${Instant.now()} ALERT: $message")
         runCatching {
-            client.post("https://api.telegram.org/bot$token/sendMessage") {
-                contentType(ContentType.Application.Json)
-                setBody(
-                    buildJsonObject {
-                        put("chat_id", chatId)
-                        put("text", message)
-                    },
-                )
+            val response =
+                client.post("https://api.telegram.org/bot$token/sendMessage") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        buildJsonObject {
+                            put("chat_id", chatId)
+                            put("text", message)
+                        },
+                    )
+                }
+            val body = response.body<JsonObject>()
+            if (body["ok"]?.jsonPrimitive?.booleanOrNull != true) {
+                val reason = body["description"]?.jsonPrimitive?.contentOrNull ?: response.status.toString()
+                println("${Instant.now()} telegram send rejected: $reason")
             }
         }.onFailure { println("${Instant.now()} telegram send failed: ${it.message}") }
     }

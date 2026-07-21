@@ -96,6 +96,14 @@ tasks.register<JavaExec>("scan") {
     mainClass.set("mtr.scripts.ScanProbeKt")
 }
 
+tasks.register<JavaExec>("notify") {
+    group = "mtr"
+    description = "Send a test alert via the configured Notifier (-Pmsg=...)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("mtr.scripts.NotifyProbeKt")
+    doFirst { args = listOf(project.findProperty("msg")?.toString() ?: "mtr test alert ✅") }
+}
+
 tasks.test {
     useJUnitPlatform()
 }
