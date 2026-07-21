@@ -38,14 +38,16 @@ fun main() =
         val params = StrategyParams()
         val risk = RiskManager(RiskLimits())
         val journal = TradeJournal()
-        val watchlist = loadWatchlistOrExample()
-        val tickers = watchlist.map { it.ticker }
-        log("Watchlist: $tickers")
 
         val tz = TradeZeroConnector(creds)
         val market = MassiveProvider.fromEnv()
         val account = tz.accountId()
         log("Account: $account (${creds.environment})")
+
+        // Autonomous universe: the scanner picks the day's tickers itself.
+        val watchlist = resolveUniverse(Scanner(market))
+        val tickers = watchlist.map { it.ticker }
+        log("Universe: $tickers")
 
         val states = tickers.associateWith { TickerState(it) }
         val openShorts = mutableMapOf<String, OpenShort>()
@@ -159,6 +161,19 @@ private suspend fun onQuote(
     } else {
         log("Order not accepted for $ticker: ${result.reason}")
     }
+}
+
+private suspend fun resolveUniverse(scanner: Scanner): List<WatchlistItem> {
+    val scanned =
+        runCatching { scanner.scan() }
+            .onFailure { log("scanner failed (${it.message}) — falling back to the watchlist file") }
+            .getOrDefault(emptyList())
+    if (scanned.isNotEmpty()) {
+        log("scanner selected ${scanned.size} ticker(s)")
+        return scanned
+    }
+    log("scanner returned no candidates — using the watchlist file")
+    return loadWatchlistOrExample()
 }
 
 private fun loadWatchlistOrExample(): List<WatchlistItem> {

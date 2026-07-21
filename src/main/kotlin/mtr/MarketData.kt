@@ -47,8 +47,19 @@ data class TickerReference(
     val marketCapUsd: Double? = null,
 )
 
+/** A one-shot market snapshot for one ticker (used by the scanner). */
+data class MarketSnapshot(
+    val ticker: String,
+    val price: Double,
+    val dayChangePct: Double, // fraction: 0.25 = +25%
+    val volume: Long,
+)
+
 interface MarketDataProvider {
     suspend fun getReference(ticker: String): TickerReference
+
+    /** Top % gainers of the day (drives the autonomous scanner). Paid tier on Massive. */
+    suspend fun getGainers(): List<MarketSnapshot>
 
     fun streamQuotes(tickers: List<String>): Flow<Quote>
 }
@@ -100,6 +111,25 @@ class MassiveProvider(
             floatShares = shares,
             marketCapUsd = res?.get("market_cap")?.jsonPrimitive?.doubleOrNull,
         )
+    }
+
+    override suspend fun getGainers(): List<MarketSnapshot> {
+        val tickers =
+            client
+                .get("$MASSIVE_REST_BASE/v2/snapshot/locale/us/markets/stocks/gainers")
+                .body<JsonObject>()["tickers"]
+                ?.jsonArray
+                .orEmpty()
+        return tickers.mapNotNull { el ->
+            val t = el.jsonObject
+            val ticker = t["ticker"]?.jsonPrimitive?.content ?: return@mapNotNull null
+            val day = t["day"]?.jsonObject
+            val price =
+                (t["lastTrade"]?.jsonObject?.get("p") ?: day?.get("c"))?.jsonPrimitive?.doubleOrNull ?: 0.0
+            val volume = day?.get("v")?.jsonPrimitive?.longOrNull ?: 0L
+            val changePct = (t["todaysChangePerc"]?.jsonPrimitive?.doubleOrNull ?: 0.0) / 100.0
+            MarketSnapshot(ticker, price, changePct, volume)
+        }
     }
 
     /**

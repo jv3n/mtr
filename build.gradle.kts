@@ -89,6 +89,13 @@ tasks.register<JavaExec>("stream") {
     doFirst { args = listOf(project.findProperty("stream")?.toString() ?: "portfolio") }
 }
 
+tasks.register<JavaExec>("scan") {
+    group = "mtr"
+    description = "Run the autonomous scanner (top gainers -> universe)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("mtr.scripts.ScanProbeKt")
+}
+
 tasks.test {
     useJUnitPlatform()
 }
