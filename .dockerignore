@@ -1,0 +1,12 @@
+.git
+.idea
+.gradle
+build
+.kotlin
+
+# Secrets & local config — never bake into the image
+.env
+data/watchlist.json
+
+docs/
+*.md

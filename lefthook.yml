@@ -1,0 +1,11 @@
+# Git hooks via lefthook. Install once: `lefthook install`
+# (binary: `scoop install lefthook` / `winget install evilmartians.lefthook`
+#  / `npm i -g @evilmartians/lefthook`).
+
+pre-commit:
+  parallel: true
+  commands:
+    spotless:
+      glob: "*.{kt,kts}"
+      run: ./gradlew spotlessApply
+      stage_fixed: true

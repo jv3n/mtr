@@ -1,0 +1,3 @@
+# Force LF line endings on all text files (working tree + index). Jars are binary.
+* text=auto eol=lf
+*.jar binary

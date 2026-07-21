@@ -1,0 +1,26 @@
+# --- IDE / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.kotlin/
+
+# --- Editors ---
+.vscode/
+*.swp
+
+# --- Gradle / build ---
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# --- Secrets & local config (NEVER commit) ---
+.env
+.env.*
+!.env.example
+data/watchlist.json
+
+# --- OS ---
+.DS_Store
+Thumbs.db
