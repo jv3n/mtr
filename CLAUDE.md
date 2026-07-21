@@ -98,9 +98,20 @@ Toute logique de trading doit respecter ces protections (un bot autonome sur com
 
 L'autonomie du bot vient de la **boucle de décision** (`strategy → risk → order`) dans `Main.kt`, pas d'un framework. C'est pourquoi Nautilus (et Python) ont été abandonnés au profit d'un bot **custom Kotlin** plus simple et mieux maîtrisé par l'utilisateur.
 
+## Qualité & CI
+
+- **Spotless (ktlint)** : `./gradlew spotlessApply` pour formater, `spotlessCheck` (inclus dans `check`/`build`) pour vérifier. Style ktlint officiel via `.editorconfig` (`max-line-length` désactivé).
+- **Lefthook** : hook pre-commit (`lefthook.yml`) qui lance `spotlessApply` sur les `.kt/.kts` stagés. Nécessite `lefthook install` une fois (binaire à installer : winget/scoop/npm).
+- **CI** (`.github/workflows/ci.yml`) : sur push/PR → JDK 25 (Temurin) + `chmod +x gradlew` + `./gradlew spotlessCheck build`.
+- **Pièges déjà réglés** (ne pas re-casser) :
+  - **Fins de ligne** : tout en **LF**, forcé par `.gitattributes` (`* text=auto eol=lf`) + `.editorconfig`. IntelliJ sous Windows tend à remettre du CRLF → ktlint casse. Ne jamais retirer le `.gitattributes`.
+  - **`gradlew` doit rester exécutable** (`100755` dans git) sinon la CI Linux fait `Permission denied`. Fix : `git update-index --chmod=+x gradlew`.
+  - Le warning « Node 20 deprecated » en CI = interne à GitHub Actions (les actions sont en Node), **sans rapport** avec le projet.
+
 ## Conventions pour Claude
 
 - Répondre et commenter en **français** (langue du projet).
 - Avant de coder une brique de trading, s'assurer que les garde-fous concernés existent ou sont ajoutés en même temps.
 - Ne jamais committer de clé API ni de secret. Utiliser `.example` pour les fichiers de config.
 - Par défaut, tout nouveau code de trading cible le **paper trading**.
+- **Commits : Conventional Commits** (`feat:`, `fix:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, `build:`, `ci:`, `chore:`, `revert:`), sujet impératif en anglais ≤ 72 car. Commande `/commit` pour en générer un ; hook lefthook `commit-msg` qui valide le format.

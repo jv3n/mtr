@@ -9,3 +9,9 @@ pre-commit:
       glob: "*.{kt,kts}"
       run: ./gradlew spotlessApply
       stage_fixed: true
+
+# Enforce Conventional Commits (feat:, fix:, docs:, ...). No Node needed — pure shell.
+commit-msg:
+  commands:
+    conventional:
+      run: 'head -1 {1} | grep -qE "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?!?: .+" || (echo "✗ Commit must be conventional: type(scope): summary  (feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert)" && exit 1)'

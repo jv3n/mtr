@@ -1,5 +1,6 @@
 # --- IDE / IntelliJ ---
 .idea/
+.run/
 *.iml
 *.ipr
 *.iws
@@ -20,6 +21,12 @@ build/
 .env.*
 !.env.example
 data/watchlist.json
+
+# --- Runtime ---
+logs/
+
+# --- Claude Code (local, personal) ---
+.claude/settings.local.json
 
 # --- OS ---
 .DS_Store

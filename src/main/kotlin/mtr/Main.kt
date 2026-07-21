@@ -4,6 +4,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
@@ -15,8 +16,8 @@ import kotlin.math.floor
  *
  * Flow: load watchlist → subscribe to Massive quotes → on each quote, either
  * manage an open short (stop-loss / take-profit) or evaluate a new short entry
- * (ETB check + guardrails). A background task logs account P&L every minute so
- * we can watch the return over a 24/7 paper run.
+ * (ETB check + guardrails). Every trade and a periodic account P&L snapshot go
+ * through the TradeJournal (roadmap #1) so we can watch the return.
  *
  * ⚠️ On the free Massive tier (15-min delayed) live signals will be sparse/unrealistic;
  * a paid real-time plan is required for a meaningful return.
@@ -36,6 +37,7 @@ fun main() =
 
         val params = StrategyParams()
         val risk = RiskManager(RiskLimits())
+        val journal = TradeJournal()
         val watchlist = loadWatchlistOrExample()
         val tickers = watchlist.map { it.ticker }
         log("Watchlist: $tickers")
@@ -50,12 +52,16 @@ fun main() =
 
         try {
             coroutineScope {
-                // Background: periodic P&L snapshot to track the return.
+                // Background: periodic P&L snapshot + running performance summary.
                 launch {
                     while (isActive) {
                         runCatching {
                             val pnl = tz.getPnl(account)
-                            log("PNL accountValue=${pnl["accountValue"]?.jsonPrimitive} dayPnl=${pnl["dayPnl"]?.jsonPrimitive} exposure=${pnl["exposure"]?.jsonPrimitive}")
+                            val accountValue = pnl["accountValue"]?.jsonPrimitive?.doubleOrNull
+                            val dayPnl = pnl["dayPnl"]?.jsonPrimitive?.doubleOrNull
+                            val exposure = pnl["exposure"]?.jsonPrimitive?.doubleOrNull
+                            journal.recordAccountPnl(accountValue, dayPnl, exposure)
+                            log("PNL accountValue=$accountValue dayPnl=$dayPnl exposure=$exposure | ${journal.summary().format()}")
                         }.onFailure { log("pnl fetch failed: ${it.message}") }
                         delay(60_000)
                     }
@@ -67,7 +73,7 @@ fun main() =
                         market.streamQuotes(tickers).collect { q ->
                             val state = states[q.ticker] ?: return@collect
                             updateState(state, q)
-                            onQuote(state, tz, risk, account, params, openShorts)
+                            onQuote(state, tz, risk, account, params, openShorts, journal)
                         }
                     }.onFailure { log("stream error: ${it.message} — reconnecting in 5s") }
                     delay(5_000)
@@ -76,6 +82,7 @@ fun main() =
         } finally {
             tz.close()
             market.close()
+            log("FINAL ${journal.summary().format()}")
         }
     }
 
@@ -97,6 +104,7 @@ private suspend fun onQuote(
     account: String,
     params: StrategyParams,
     openShorts: MutableMap<String, OpenShort>,
+    journal: TradeJournal,
 ) {
     val ticker = state.ticker
     val open = openShorts[ticker]
@@ -107,7 +115,8 @@ private suspend fun onQuote(
         if (exit != ExitReason.NONE) {
             val result = tz.flatten(account, ticker)
             if (result.accepted) {
-                val realized = (open.entryPrice - state.lastPrice) * open.shares
+                val trade = journal.recordExit(ticker, state.lastPrice, exit.name)
+                val realized = trade?.realizedPnlUsd ?: realizedPnl(TradeSide.SHORT, open.shares, open.entryPrice, state.lastPrice)
                 risk.registerRealizedPnl(realized)
                 risk.closePosition(ticker)
                 openShorts.remove(ticker)
@@ -143,6 +152,7 @@ private suspend fun onQuote(
     if (result.accepted) {
         openShorts[ticker] = OpenShort(entryPrice = state.lastPrice, shares = shares)
         risk.registerFill(ticker, notional)
+        journal.recordEntry(ticker, TradeSide.SHORT, shares, state.lastPrice, signal.reason)
         log("ENTER SHORT $ticker x$shares @ ${state.lastPrice} (${signal.reason})")
     } else {
         log("Order not accepted for $ticker: ${result.reason}")
