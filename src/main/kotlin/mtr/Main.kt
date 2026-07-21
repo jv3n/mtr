@@ -90,6 +90,8 @@ private fun updateState(
     s: TickerState,
     q: Quote,
 ) {
+    // Record the VWAP side from the PREVIOUS tick before overwriting (for cross detection).
+    s.wasAboveVwap = s.vwap > 0.0 && s.lastPrice >= s.vwap
     s.lastPrice = q.price
     s.vwap = q.vwap
     if (q.dayOpen > 0) s.dayOpen = q.dayOpen
