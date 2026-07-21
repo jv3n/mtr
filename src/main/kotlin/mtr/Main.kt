@@ -11,6 +11,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.math.floor
 
 /**
@@ -48,6 +51,11 @@ fun main() =
         val journal = TradeJournal()
         val notifier = notifierFromEnv()
 
+        // Scheduled-window auto-close: flatten and stop at the end of the trading session
+        // (e.g. SESSION_END=15:00, SESSION_TZ=America/New_York). Unset = run until killed.
+        val sessionEnd = envOrNull("SESSION_END")?.let { LocalTime.parse(it) }
+        val sessionZone = envOrNull("SESSION_TZ")?.let { ZoneId.of(it) }
+
         val tz = TradeZeroConnector(creds)
         val market = MassiveProvider.fromEnv()
         val account = tz.accountId()
@@ -70,6 +78,14 @@ fun main() =
                 // Kill-switch watch (fast): manual KILL file or a risk halt → flatten all + stop.
                 launch {
                     while (isActive) {
+                        if (sessionEnd != null &&
+                            sessionZone != null &&
+                            !risk.halted &&
+                            !ZonedDateTime.now(sessionZone).toLocalTime().isBefore(sessionEnd)
+                        ) {
+                            log("session end ($sessionEnd ${sessionZone.id}) reached — flattening and stopping")
+                            risk.kill()
+                        }
                         if (Files.exists(KILL_FILE)) {
                             log("KILL file detected — tripping the kill switch")
                             risk.kill()
@@ -311,6 +327,9 @@ private fun loadWatchlistOrExample(): List<WatchlistItem> {
             log("WARNING: data/watchlist.json not found — using example watchlist.")
             Watchlist.load(example)
         }
-        else -> error("No watchlist found (data/watchlist.json).")
+        else -> {
+            log("WARNING: no watchlist file and the scanner returned nothing — empty universe (idle).")
+            emptyList()
+        }
     }
 }

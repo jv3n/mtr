@@ -1,0 +1,10 @@
+services:
+  mtr:
+    image: ghcr.io/jv3n/mtr:latest
+    env_file: .env
+    volumes:
+      - ./data:/app/data # optional watchlist fallback; the scanner provides the universe
+    # on-failure (not "always"): the bot exits intentionally at session end / kill switch.
+    restart: on-failure
+    # Give the bot time to flatten on the kill switch before SIGKILL.
+    stop_grace_period: 40s

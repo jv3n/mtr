@@ -87,12 +87,15 @@ Toute logique de trading doit respecter ces protections (un bot autonome sur com
 - **PDT (Pattern Day Trader)** : ≥ 25 000 $ d'équité requis pour ≥ 4 day trades / 5 jours ouvrés sur compte margin — à vérifier avant le réel.
 - Stratégie parmi les **plus risquées** (risque de short squeeze théoriquement illimité, halts, borrows coûteux). Phase paper trading longue obligatoire avant tout capital réel. Pas un conseil financier.
 
-## Déploiement
+## Déploiement — fenêtre horaire programmée (guide complet : `docs/deploy.md`)
 
-- **Phase actuelle : test paper 24/7.** L'utilisateur veut laisser le bot tourner en continu sur paper pour mesurer le rendement. Le process tourne 24/7 mais **ne trade que quand des quotes arrivent** (heures de marché US) — il idle la nuit/week-end. La boucle `Main` a une **reconnexion WebSocket auto** pour tenir la durée.
-- **Passage au réel plus tard : repasser en fenêtre horaire programmée** (VM démarrée pré-marché / éteinte après séance via Cloud Scheduler) pour ne payer que quelques heures/jour — la stratégie reste intraday (~9h30–11h30 ET).
-- **GCP Compute Engine** (VM `e2-small`), région proche côte est US (ex. `us-east4`). Pas Cloud Run (WebSocket persistant).
-- **Docker JVM** (`Dockerfile` multi-stage : build via wrapper → JRE 25, `installDist`). Clés via **Secret Manager** → env. `data/watchlist.json` monté en volume. Redémarrage auto + alerte si le process meurt.
+- **Décision : fenêtre programmée (éco), pas 24/7.** VM démarrée à **7h** et éteinte après la **clôture (16h)**, **heure de New York**, via **Cloud Scheduler** (start/stop de la VM). Jours ouvrés uniquement.
+- **Auto-clôture par le bot** : à `SESSION_END` (env, ex. `16:00` / `SESSION_TZ=America/New_York`) le bot **flatten tout + s'arrête** (réutilise le kill switch) → aucune position hors fenêtre. La VM est éteinte ~10 min après, juste pour le coût.
+- **Image** : `.github/workflows/docker.yml` build & push `ghcr.io/jv3n/mtr:latest` à chaque push master. **Rendre le package GHCR public** pour que la VM le pull sans auth.
+- **GCP Compute Engine** (`e2-small`, `us-east4`, image `cos-stable`). `deploy/startup-script.sh` : Docker + secrets Secret Manager → `.env` + `docker compose up -d`. `docker-compose.yml` : `restart: on-failure`, `stop_grace_period: 40s`.
+- **Secrets** via Secret Manager (`mtr-<VAR>`), SA VM avec `secretmanager.secretAccessor`.
+- **Monitoring** : alertes Telegram du bot (start/stop/kill/halt/stream) ; un « started » hors horaire = crash/restart.
+- **Dockerfile validé** (build JDK 25 → runtime JRE 25, `installDist`).
 
 ## Note moteur — autonomie ≠ Nautilus
 
