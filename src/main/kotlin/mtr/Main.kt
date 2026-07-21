@@ -31,6 +31,7 @@ import kotlin.math.floor
 private data class OpenShort(
     val entryPrice: Double,
     val shares: Int,
+    val entryMs: Long,
 )
 
 private val KILL_FILE: Path = Path.of("KILL")
@@ -59,6 +60,7 @@ fun main() =
 
         val states = tickers.associateWith { TickerState(it) }
         val openShorts = mutableMapOf<String, OpenShort>()
+        val haltFlagged = mutableSetOf<String>()
 
         notifier.send("mtr started · $account (${creds.environment}) · universe=$tickers")
         try {
@@ -93,6 +95,7 @@ fun main() =
                             journal.recordAccountPnl(accountValue, dayPnl, exposure)
                             log("PNL accountValue=$accountValue dayPnl=$dayPnl exposure=$exposure | ${journal.summary().format()}")
                             reconcile(tz, account, openShorts, notifier)
+                            checkHalts(states, openShorts, params, notifier, haltFlagged, System.currentTimeMillis())
                         }.onFailure { log("periodic check failed: ${it.message}") }
                         delay(60_000)
                     }
@@ -104,7 +107,7 @@ fun main() =
                     runCatching {
                         market.streamQuotes(tickers).collect { q ->
                             val state = states[q.ticker] ?: return@collect
-                            updateState(state, q)
+                            updateState(state, q, System.currentTimeMillis())
                             onQuote(state, tz, risk, account, params, openShorts, journal)
                         }
                     }.onFailure {
@@ -129,9 +132,11 @@ fun main() =
 private fun updateState(
     s: TickerState,
     q: Quote,
+    nowMs: Long,
 ) {
     // Record the VWAP side from the PREVIOUS tick before overwriting (for cross detection).
     s.wasAboveVwap = s.vwap > 0.0 && s.lastPrice >= s.vwap
+    s.lastUpdateMs = nowMs
     s.lastPrice = q.price
     s.vwap = q.vwap
     if (q.dayOpen > 0) s.dayOpen = q.dayOpen
@@ -151,9 +156,10 @@ private suspend fun onQuote(
     val ticker = state.ticker
     val open = openShorts[ticker]
 
-    // 1. Manage an existing short: stop-loss / take-profit.
+    // 1. Manage an existing short: stop-loss / take-profit / time stop.
     if (open != null) {
-        val exit = shouldExitShort(open.entryPrice, state.lastPrice, params)
+        val heldSeconds = (System.currentTimeMillis() - open.entryMs) / 1000
+        val exit = shouldExit(open.entryPrice, state.lastPrice, heldSeconds, params)
         if (exit != ExitReason.NONE) {
             val result =
                 runCatching { tz.flatten(account, ticker) }
@@ -164,8 +170,10 @@ private suspend fun onQuote(
                 val realized = trade?.realizedPnlUsd ?: realizedPnl(TradeSide.SHORT, open.shares, open.entryPrice, state.lastPrice)
                 risk.registerRealizedPnl(realized)
                 risk.closePosition(ticker)
+                risk.recordDayTrade()
                 openShorts.remove(ticker)
                 log("EXIT $ticker ($exit) @ ${state.lastPrice} entry=${open.entryPrice} pnl=%.2f".format(realized))
+                if (risk.dayTrades == 4) log("PDT WARNING: 4 day trades today — live trading needs >= \$25k margin equity")
             }
         }
         return
@@ -200,7 +208,7 @@ private suspend fun onQuote(
             .onFailure { log("submitShort $ticker failed: ${it.message}") }
             .getOrNull()
     if (result?.accepted == true) {
-        openShorts[ticker] = OpenShort(entryPrice = state.lastPrice, shares = shares)
+        openShorts[ticker] = OpenShort(entryPrice = state.lastPrice, shares = shares, entryMs = System.currentTimeMillis())
         risk.registerFill(ticker, notional)
         journal.recordEntry(ticker, TradeSide.SHORT, shares, state.lastPrice, signal.reason)
         log("ENTER SHORT $ticker x$shares @ ${state.lastPrice} (${signal.reason})")
@@ -227,6 +235,7 @@ private suspend fun flattenAll(
                     val realized = trade?.realizedPnlUsd ?: realizedPnl(TradeSide.SHORT, open.shares, open.entryPrice, price)
                     risk.registerRealizedPnl(realized)
                     risk.closePosition(ticker)
+                    risk.recordDayTrade()
                     openShorts.remove(ticker)
                     closed++
                 }
@@ -253,6 +262,30 @@ private suspend fun reconcile(
     val localOnly = local - brokerShorts
     if (brokerOnly.isNotEmpty() || localOnly.isNotEmpty()) {
         notifier.send("⚠️ position mismatch — broker-only=$brokerOnly local-only=$localOnly")
+    }
+}
+
+/**
+ * Detect likely LULD halts on tickers we hold: if a ticker stops updating for
+ * [StrategyParams.haltSeconds], freeze (we can't fill during a halt anyway) and alert
+ * once. Clears the flag when quotes resume.
+ */
+private suspend fun checkHalts(
+    states: Map<String, TickerState>,
+    openShorts: Map<String, OpenShort>,
+    params: StrategyParams,
+    notifier: Notifier,
+    flagged: MutableSet<String>,
+    nowMs: Long,
+) {
+    for (ticker in openShorts.keys) {
+        val state = states[ticker] ?: continue
+        val stale = isStale(state.lastUpdateMs, nowMs, params.haltSeconds)
+        if (stale && flagged.add(ticker)) {
+            notifier.send("⏸️ possible halt on $ticker (no quote ${params.haltSeconds}s) — holding, frozen")
+        } else if (!stale) {
+            flagged.remove(ticker)
+        }
     }
 }
 

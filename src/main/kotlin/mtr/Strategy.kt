@@ -28,6 +28,7 @@ data class TickerState(
     var dayHigh: Double = 0.0,
     var pctChange: Double = 0.0, // fraction since the open (0.5 = +50%)
     var wasAboveVwap: Boolean = false, // VWAP side on the PREVIOUS tick (for cross detection)
+    var lastUpdateMs: Long = 0L, // wall-clock of the last quote (for halt detection)
 )
 
 /** Tunable strategy parameters. */
@@ -36,10 +37,12 @@ data class StrategyParams(
     val minRetraceFromHighPct: Double = 0.03, // price must be ≥3% off the day high (rolling over)
     val stopLossPct: Double = 0.05, // cover if the short loses 5%
     val takeProfitPct: Double = 0.10, // cover if the short gains 10%
+    val maxHoldSeconds: Long = 1800, // time stop: cover after 30 min if no stop/TP hit
+    val haltSeconds: Long = 60, // no quote for this long → the ticker is likely halted
     val perTradeUsd: Double = 2000.0, // target notional per short
 )
 
-enum class ExitReason { NONE, STOP_LOSS, TAKE_PROFIT }
+enum class ExitReason { NONE, STOP_LOSS, TAKE_PROFIT, TIME }
 
 /**
  * Entry evaluation (v1). Short a pump & dump on the momentum flip, requiring three
@@ -76,9 +79,10 @@ fun evaluate(
  * Exit decision for an OPEN short entered at [entryPrice], given the current price.
  * For a short, profit rises as price falls.
  */
-fun shouldExitShort(
+fun shouldExit(
     entryPrice: Double,
     currentPrice: Double,
+    heldSeconds: Long,
     params: StrategyParams = StrategyParams(),
 ): ExitReason {
     if (entryPrice <= 0.0) return ExitReason.NONE
@@ -86,6 +90,14 @@ fun shouldExitShort(
     return when {
         gainPct >= params.takeProfitPct -> ExitReason.TAKE_PROFIT
         gainPct <= -params.stopLossPct -> ExitReason.STOP_LOSS
+        heldSeconds >= params.maxHoldSeconds -> ExitReason.TIME
         else -> ExitReason.NONE
     }
 }
+
+/** A ticker that hasn't updated for [StrategyParams.haltSeconds] is likely in an LULD halt. */
+fun isStale(
+    lastUpdateMs: Long,
+    nowMs: Long,
+    haltSeconds: Long,
+): Boolean = lastUpdateMs > 0L && (nowMs - lastUpdateMs) >= haltSeconds * 1000

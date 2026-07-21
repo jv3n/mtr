@@ -17,9 +17,17 @@ class RiskManager(
     var halted: Boolean = false
         private set
 
+    // Round-trips closed today. Relevant for the PDT rule (>=4 day trades / 5 days needs >=$25k).
+    var dayTrades: Int = 0
+        private set
+
     /** Kill switch — blocks any new risk-taking. */
     fun kill() {
         halted = true
+    }
+
+    fun recordDayTrade() {
+        dayTrades++
     }
 
     /** Returns (allowed, reason). The reason is useful for logging/alerting. */
