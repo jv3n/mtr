@@ -81,6 +81,14 @@ tasks.register<JavaExec>("cover") {
     doFirst { args = listOf(project.findProperty("sym")?.toString() ?: "SHPH") }
 }
 
+tasks.register<JavaExec>("stream") {
+    group = "mtr"
+    description = "Probe the TradeZero WebSocket (-Pstream=portfolio|pnl)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("mtr.scripts.StreamProbeKt")
+    doFirst { args = listOf(project.findProperty("stream")?.toString() ?: "portfolio") }
+}
+
 tasks.test {
     useJUnitPlatform()
 }
