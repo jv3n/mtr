@@ -92,7 +92,8 @@ Toute logique de trading doit respecter ces protections (un bot autonome sur com
 - **Décision : fenêtre programmée (éco), pas 24/7.** VM démarrée à **7h** et éteinte après la **clôture (16h)**, **heure de New York**, via **Cloud Scheduler** (start/stop de la VM). Jours ouvrés uniquement.
 - **Auto-clôture par le bot** : à `SESSION_END` (env, ex. `16:00` / `SESSION_TZ=America/New_York`) le bot **flatten tout + s'arrête** (réutilise le kill switch) → aucune position hors fenêtre. La VM est éteinte ~10 min après, juste pour le coût.
 - **Image** : `.github/workflows/docker.yml` build & push `ghcr.io/jv3n/mtr:latest` à chaque push master. **Rendre le package GHCR public** pour que la VM le pull sans auth.
-- **GCP Compute Engine** (`e2-small`, `us-east4`, image `cos-stable`). `deploy/startup-script.sh` : Docker + secrets Secret Manager → `.env` + `docker compose up -d`. `docker-compose.yml` : `restart: on-failure`, `stop_grace_period: 40s`.
+- **GCP Compute Engine** (`e2-small`, `us-east4`, image **`ubuntu-2204-lts`** — pas COS, dont le FS read-only casse le startup-script). `deploy/startup-script.sh` : Docker + secrets Secret Manager → `.env` + `docker compose up -d` (compose VM avec `logging: gcplogs` → logs conteneur dans Cloud Logging). Provisioning en une passe : **`deploy/gcp-setup.sh {setup|vm|all}`**.
+- **Déployé & validé en prod** (2026-07-21) : projet **`mtr-bot-1784670138`**, VM `mtr`, 2 jobs scheduler (7h/16h10 ET), alerte Telegram « started » reçue. VM à l'arrêt hors fenêtre.
 - **Secrets** via Secret Manager (`mtr-<VAR>`), SA VM avec `secretmanager.secretAccessor`.
 - **Monitoring** : alertes Telegram du bot (start/stop/kill/halt/stream) ; un « started » hors horaire = crash/restart.
 - **Dockerfile validé** (build JDK 25 → runtime JRE 25, `installDist`).

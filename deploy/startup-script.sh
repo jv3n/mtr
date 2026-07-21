@@ -23,6 +23,8 @@ services:
       - ./data:/app/data
     restart: on-failure
     stop_grace_period: 40s
+    logging:
+      driver: gcplogs # container stdout -> Cloud Logging (VM has cloud-platform scope)
 YML
 
 # Pull secrets from Secret Manager (secret names: mtr-<VAR>).

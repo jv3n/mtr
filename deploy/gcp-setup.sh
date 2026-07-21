@@ -48,7 +48,7 @@ setup() {
 vm() {
   echo "== VM =="
   gcloud compute instances create mtr --project "$PROJECT_ID" --zone="$ZONE" \
-    --machine-type=e2-small --image-family=cos-stable --image-project=cos-cloud \
+    --machine-type=e2-small --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud \
     --scopes=cloud-platform \
     --metadata-from-file=startup-script=deploy/startup-script.sh
 
@@ -73,7 +73,11 @@ vm() {
   gcloud scheduler jobs create http mtr-stop --project "$PROJECT_ID" --location="$REGION" \
     --schedule="10 16 * * 1-5" --time-zone="America/New_York" \
     --uri="$base/stop" --http-method=POST --oauth-service-account-email="$sched" 2>/dev/null || true
-  echo "vm + scheduler done. (Ensure the GHCR image is public so the VM can pull it.)"
+
+  # Stop right after creation so the VM only runs inside the scheduled window
+  # (the start job powers it on at 7h). To test now: gcloud compute instances start mtr.
+  gcloud compute instances stop mtr --project "$PROJECT_ID" --zone="$ZONE"
+  echo "vm + scheduler done (VM stopped; scheduler will start it at 7h ET). Ensure the GHCR image is public."
 }
 
 case "${1:-setup}" in

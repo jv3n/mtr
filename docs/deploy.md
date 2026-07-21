@@ -31,7 +31,7 @@ done
 ```bash
 gcloud compute instances create mtr \
   --project="$PROJECT" --zone=us-east4-c --machine-type=e2-small \
-  --image-family=cos-stable --image-project=cos-cloud \
+  --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud \
   --metadata-from-file=startup-script=deploy/startup-script.sh \
   --scopes=cloud-platform            # pour accéder à Secret Manager
 ```
