@@ -1,8 +1,10 @@
 package mtr
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -14,19 +16,24 @@ import kotlin.math.floor
 /**
  * Orchestration / autonomous paper-trading loop.
  *
- * Flow: load watchlist → subscribe to Massive quotes → on each quote, either
- * manage an open short (stop-loss / take-profit) or evaluate a new short entry
- * (ETB check + guardrails). Every trade and a periodic account P&L snapshot go
- * through the TradeJournal (roadmap #1) so we can watch the return.
+ * Flow: scanner picks the universe → subscribe to Massive quotes → on each quote,
+ * manage an open short (stop/TP) or evaluate a new short (ETB + guardrails). Trades
+ * and periodic P&L go through the TradeJournal (#1).
  *
- * ⚠️ On the free Massive tier (15-min delayed) live signals will be sparse/unrealistic;
- * a paid real-time plan is required for a meaningful return.
+ * Guardrails (#2): daily-loss limit or a manual `KILL` file trip the kill switch →
+ * flatten everything, alert, and stop. Order/API calls are isolated so one failure
+ * can't crash the loop; positions are reconciled against the broker to catch phantoms.
+ *
+ * ⚠️ On the free Massive tier (delayed) live signals are sparse; a paid real-time plan
+ * is required for a meaningful return.
  */
 
 private data class OpenShort(
     val entryPrice: Double,
     val shares: Int,
 )
+
+private val KILL_FILE: Path = Path.of("KILL")
 
 private fun log(msg: String) = println("${Instant.now()} $msg")
 
@@ -38,6 +45,7 @@ fun main() =
         val params = StrategyParams()
         val risk = RiskManager(RiskLimits())
         val journal = TradeJournal()
+        val notifier = notifierFromEnv()
 
         val tz = TradeZeroConnector(creds)
         val market = MassiveProvider.fromEnv()
@@ -52,9 +60,29 @@ fun main() =
         val states = tickers.associateWith { TickerState(it) }
         val openShorts = mutableMapOf<String, OpenShort>()
 
+        notifier.send("mtr started · $account (${creds.environment}) · universe=$tickers")
         try {
             coroutineScope {
-                // Background: periodic P&L snapshot + running performance summary.
+                val scopeJob = coroutineContext.job
+
+                // Kill-switch watch (fast): manual KILL file or a risk halt → flatten all + stop.
+                launch {
+                    while (isActive) {
+                        if (Files.exists(KILL_FILE)) {
+                            log("KILL file detected — tripping the kill switch")
+                            risk.kill()
+                        }
+                        if (risk.halted) {
+                            val n = flattenAll(tz, account, states, openShorts, journal, risk)
+                            notifier.send("🛑 KILL SWITCH — flattened $n position(s); stopping. ${journal.summary().format()}")
+                            scopeJob.cancel()
+                            break
+                        }
+                        delay(5_000)
+                    }
+                }
+
+                // P&L snapshot + broker reconciliation (slow).
                 launch {
                     while (isActive) {
                         runCatching {
@@ -64,12 +92,14 @@ fun main() =
                             val exposure = pnl["exposure"]?.jsonPrimitive?.doubleOrNull
                             journal.recordAccountPnl(accountValue, dayPnl, exposure)
                             log("PNL accountValue=$accountValue dayPnl=$dayPnl exposure=$exposure | ${journal.summary().format()}")
-                        }.onFailure { log("pnl fetch failed: ${it.message}") }
+                            reconcile(tz, account, openShorts, notifier)
+                        }.onFailure { log("periodic check failed: ${it.message}") }
                         delay(60_000)
                     }
                 }
 
                 // Resilient market-data loop (auto-reconnect for 24/7).
+                var streamFailures = 0
                 while (isActive) {
                     runCatching {
                         market.streamQuotes(tickers).collect { q ->
@@ -77,14 +107,22 @@ fun main() =
                             updateState(state, q)
                             onQuote(state, tz, risk, account, params, openShorts, journal)
                         }
-                    }.onFailure { log("stream error: ${it.message} — reconnecting in 5s") }
+                    }.onFailure {
+                        streamFailures++
+                        log("stream error: ${it.message} — reconnecting in 5s")
+                        if (streamFailures == 3) notifier.send("⚠️ market stream unstable ($streamFailures reconnects)")
+                    }
                     delay(5_000)
                 }
             }
+        } catch (e: CancellationException) {
+            log("shutting down (${e.message})")
         } finally {
             tz.close()
             market.close()
             log("FINAL ${journal.summary().format()}")
+            notifier.send("mtr stopped. ${journal.summary().format()}")
+            notifier.close()
         }
     }
 
@@ -117,8 +155,11 @@ private suspend fun onQuote(
     if (open != null) {
         val exit = shouldExitShort(open.entryPrice, state.lastPrice, params)
         if (exit != ExitReason.NONE) {
-            val result = tz.flatten(account, ticker)
-            if (result.accepted) {
+            val result =
+                runCatching { tz.flatten(account, ticker) }
+                    .onFailure { log("flatten $ticker failed: ${it.message}") }
+                    .getOrNull()
+            if (result?.accepted == true) {
                 val trade = journal.recordExit(ticker, state.lastPrice, exit.name)
                 val realized = trade?.realizedPnlUsd ?: realizedPnl(TradeSide.SHORT, open.shares, open.entryPrice, state.lastPrice)
                 risk.registerRealizedPnl(realized)
@@ -131,6 +172,7 @@ private suspend fun onQuote(
     }
 
     // 2. No position: look for a new short entry.
+    if (risk.halted) return
     val signal = evaluate(state, params)
     if (signal.type != SignalType.SHORT) return
 
@@ -147,19 +189,70 @@ private suspend fun onQuote(
     }
 
     // Only short easy-to-borrow names for now (locate WS not implemented yet).
-    if (!tz.isEasyToBorrow(account, ticker)) {
+    val etb = runCatching { tz.isEasyToBorrow(account, ticker) }.getOrDefault(false)
+    if (!etb) {
         log("Short skipped for $ticker: hard-to-borrow (locate stream TODO)")
         return
     }
 
-    val result = tz.submitShort(account, ticker, shares)
-    if (result.accepted) {
+    val result =
+        runCatching { tz.submitShort(account, ticker, shares) }
+            .onFailure { log("submitShort $ticker failed: ${it.message}") }
+            .getOrNull()
+    if (result?.accepted == true) {
         openShorts[ticker] = OpenShort(entryPrice = state.lastPrice, shares = shares)
         risk.registerFill(ticker, notional)
         journal.recordEntry(ticker, TradeSide.SHORT, shares, state.lastPrice, signal.reason)
         log("ENTER SHORT $ticker x$shares @ ${state.lastPrice} (${signal.reason})")
-    } else {
-        log("Order not accepted for $ticker: ${result.reason}")
+    }
+}
+
+/** Cover every tracked short (kill switch). Returns the number of positions closed. */
+private suspend fun flattenAll(
+    tz: TradeZeroConnector,
+    account: String,
+    states: Map<String, TickerState>,
+    openShorts: MutableMap<String, OpenShort>,
+    journal: TradeJournal,
+    risk: RiskManager,
+): Int {
+    var closed = 0
+    for (ticker in openShorts.keys.toList()) {
+        val open = openShorts[ticker] ?: continue
+        val price = states[ticker]?.lastPrice?.takeIf { it > 0.0 } ?: open.entryPrice
+        runCatching { tz.flatten(account, ticker) }
+            .onSuccess { r ->
+                if (r.accepted) {
+                    val trade = journal.recordExit(ticker, price, "KILL")
+                    val realized = trade?.realizedPnlUsd ?: realizedPnl(TradeSide.SHORT, open.shares, open.entryPrice, price)
+                    risk.registerRealizedPnl(realized)
+                    risk.closePosition(ticker)
+                    openShorts.remove(ticker)
+                    closed++
+                }
+            }.onFailure { log("flatten $ticker failed: ${it.message}") }
+    }
+    return closed
+}
+
+/** Warn if the broker's open shorts don't match what we track locally (phantom/stale positions). */
+private suspend fun reconcile(
+    tz: TradeZeroConnector,
+    account: String,
+    openShorts: Map<String, OpenShort>,
+    notifier: Notifier,
+) {
+    val brokerShorts =
+        tz
+            .getPositions(account)
+            .filter { (it["shares"]?.jsonPrimitive?.doubleOrNull ?: 0.0) < 0.0 }
+            .mapNotNull { it["symbol"]?.jsonPrimitive?.content }
+            .toSet()
+    val local = openShorts.keys.toSet()
+    val brokerOnly = brokerShorts - local
+    val localOnly = local - brokerShorts
+    if (brokerOnly.isNotEmpty() || localOnly.isNotEmpty()) {
+        notifier.send("⚠️ position mismatch — broker-only=$brokerOnly local-only=$localOnly")
     }
 }
 
