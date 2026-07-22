@@ -47,11 +47,13 @@ class TradeZeroApiException(
 data class LocateQuote(
     val accountId: String,
     val symbol: String,
+    /** Shares REQUESTED (`locateShares`) — not necessarily what the broker grants. */
     val shares: Int,
     val pricePerShare: Double,
     val status: Int,
     /** Null when the API leaves it unset — paper returns the literal `<no value>`. */
     val quoteReqId: String?,
+    /** Shares actually GRANTED. A locate can be partially filled: this may be < [shares]. */
     val filledShares: Int,
     val error: Int,
     val text: String,
@@ -393,7 +395,11 @@ class TradeZeroConnector(
         val net = netShares(accountId, symbol)
         if (net == 0.0) return OrderResult("", symbol, false, "no open position")
         val side = if (net < 0) "Buy" else "Sell"
-        return submitOrder(accountId, symbol, side, "Close", kotlin.math.abs(net).toInt(), "Market", null, null, "mtr-flat")
+        // The API rejects orderQuantity < 1e-06, and we round to whole shares: a fractional
+        // net below one share would truncate to 0 and come back as an opaque 400. Say so.
+        val qty = kotlin.math.abs(net).toInt()
+        if (qty < 1) return OrderResult("", symbol, false, "position below one share ($net) — cannot close via a whole-share order")
+        return submitOrder(accountId, symbol, side, "Close", qty, "Market", null, null, "mtr-flat")
     }
 }
 
