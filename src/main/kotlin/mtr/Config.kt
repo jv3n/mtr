@@ -18,22 +18,61 @@ private val dotenv by lazy {
 /** Look up a key from .env first, then the process environment. */
 fun envOrNull(key: String): String? = dotenv[key] ?: System.getenv(key)
 
+/**
+ * Trading environment. More than a label: routes, locate requirements and the safety gates
+ * on destructive scripts all hang off it, and a different broker would express its own
+ * quirks the same way. Keep behavioural differences HERE rather than scattering
+ * `== "paper"` string tests across the codebase.
+ */
+enum class TradingEnv {
+    PAPER,
+    LIVE,
+    ;
+
+    val isLive: Boolean get() = this == LIVE
+
+    /** Paper only has simulated venues; live routes to the real ones. */
+    val defaultRoute: String get() = if (this == PAPER) "PAPER" else "SMART"
+
+    /**
+     * Whether shorting a hard-to-borrow name requires securing a locate first.
+     *
+     * TradeZero locates are LIVE-ONLY (paper locate calls come back Rejected), and paper
+     * accepts a short with no locate at all — verified 2026-07-22, see issue #4.
+     */
+    val requiresLocateForHardToBorrow: Boolean get() = this == LIVE
+
+    /** Lowercase, so log lines and alerts read the way they always have. */
+    override fun toString(): String = name.lowercase()
+
+    companion object {
+        /**
+         * Anything not explicitly live resolves to PAPER. A typo in `TRADEZERO_ENV` must
+         * never be what puts real money at risk.
+         */
+        fun parse(raw: String?): TradingEnv =
+            when (raw?.trim()?.lowercase()) {
+                "live", "prod", "production", "real" -> LIVE
+                else -> PAPER
+            }
+    }
+}
+
 data class TradeZeroCredentials(
     val apiKey: String,
     val apiSecret: String,
-    // "paper" or "live". Always start in paper.
-    val environment: String = "paper",
+    // Always start in paper.
+    val environment: TradingEnv = TradingEnv.PAPER,
 ) {
     companion object {
         fun fromEnv(): TradeZeroCredentials {
             val key = envOrNull("TRADEZERO_API_KEY")
             val secret = envOrNull("TRADEZERO_API_SECRET")
-            val env = envOrNull("TRADEZERO_ENV") ?: "paper"
             require(!key.isNullOrBlank() && !secret.isNullOrBlank()) {
                 "TRADEZERO_API_KEY / TRADEZERO_API_SECRET are missing. " +
                     "Set them in .env (local) or via Secret Manager (production)."
             }
-            return TradeZeroCredentials(key, secret, env)
+            return TradeZeroCredentials(key, secret, TradingEnv.parse(envOrNull("TRADEZERO_ENV")))
         }
     }
 }

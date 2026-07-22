@@ -26,8 +26,9 @@ import kotlinx.serialization.json.putJsonArray
  * Handshake: connect → server sends {"@system":true,"status":"PENDING_AUTH"} →
  * send {key, secret} → server sends CONNECTED → send the stream's subscribe payload.
  *
- * NB: locate quotes are NOT documented on the WebSocket. This client covers the
- * documented streams; the locate-quote delivery mechanism is still being probed (#4).
+ * NB: locate quotes do NOT travel over the WebSocket at all — probed live on 2026-07-22
+ * (see #4). They land in `GET /accounts/:id/locates/history` a couple of seconds after the
+ * quote request; see TradeZeroConnector.awaitLocateQuote. This client covers pnl/portfolio.
  */
 class TradeZeroStream(
     private val creds: TradeZeroCredentials,

@@ -14,7 +14,7 @@ fun main(args: Array<String>) =
         val qty = args.getOrNull(1)?.toIntOrNull() ?: 10
 
         val creds = TradeZeroCredentials.fromEnv()
-        if (creds.environment != "paper") {
+        if (creds.environment.isLive) {
             println("REFUSING: TRADEZERO_ENV=${creds.environment} (paper only for this test)")
             return@runBlocking
         }

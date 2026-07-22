@@ -44,7 +44,7 @@ private fun log(msg: String) = println("${Instant.now()} $msg")
 fun main() =
     kotlinx.coroutines.runBlocking {
         val creds = TradeZeroCredentials.fromEnv()
-        if (creds.environment != "paper") log("WARNING: LIVE ENVIRONMENT — real money.")
+        if (creds.environment.isLive) log("WARNING: LIVE ENVIRONMENT — real money.")
 
         val params = StrategyParams()
         val risk = RiskManager(RiskLimits())
@@ -212,11 +212,16 @@ private suspend fun onQuote(
         return
     }
 
-    // Only short easy-to-borrow names for now (locate WS not implemented yet).
-    val etb = runCatching { tz.isEasyToBorrow(account, ticker) }.getOrDefault(false)
-    if (!etb) {
-        log("Short skipped for $ticker: hard-to-borrow (locate stream TODO)")
-        return
+    // Paper accepts a short with no locate at all, so the borrow check is pointless there.
+    // Live needs a secured locate for hard-to-borrow names, and that flow is not usable yet
+    // (locates are live-only, #4) -> keep refusing HTB names on live.
+    if (tz.environment.requiresLocateForHardToBorrow) {
+        // On an API failure this reads as hard-to-borrow, which is the safe side.
+        val etb = runCatching { tz.isEasyToBorrow(account, ticker) }.getOrDefault(false)
+        if (!etb) {
+            log("Short skipped for $ticker: hard-to-borrow and the locate flow is not wired yet (#4)")
+            return
+        }
     }
 
     val result =

@@ -13,7 +13,7 @@ fun main(args: Array<String>) =
         val symbol = (args.getOrNull(0) ?: "SHPH").uppercase()
 
         val creds = TradeZeroCredentials.fromEnv()
-        if (creds.environment != "paper") {
+        if (creds.environment.isLive) {
             println("REFUSING: TRADEZERO_ENV=${creds.environment} (paper only)")
             return@runBlocking
         }

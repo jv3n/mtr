@@ -18,6 +18,8 @@ dependencies {
     implementation("io.ktor:ktor-client-core:$ktor")
     implementation("io.ktor:ktor-client-cio:$ktor")
     implementation("io.ktor:ktor-client-content-negotiation:$ktor")
+    // TradeZero gzips its ERROR responses (not its 200s) -> without this any 4xx body is unreadable.
+    implementation("io.ktor:ktor-client-encoding:$ktor")
     implementation("io.ktor:ktor-serialization-kotlinx-json:$ktor")
     implementation("io.ktor:ktor-client-websockets:$ktor")
 
@@ -102,6 +104,20 @@ tasks.register<JavaExec>("notify") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("mtr.scripts.NotifyProbeKt")
     doFirst { args = listOf(project.findProperty("msg")?.toString() ?: "mtr test alert ✅") }
+}
+
+tasks.register<JavaExec>("locate") {
+    group = "mtr"
+    description = "Dump locate inventory/history; optionally request a quote (-Pquote=SYM -Pqty=N)"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("mtr.scripts.LocateProbeKt")
+    doFirst {
+        args =
+            listOf(
+                project.findProperty("quote")?.toString() ?: "",
+                project.findProperty("qty")?.toString() ?: "100",
+            )
+    }
 }
 
 tasks.test {
