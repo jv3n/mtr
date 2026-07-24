@@ -2,7 +2,7 @@ plugins {
     // Kotlin 2.3.0: supports Java 25 (IntelliJ JBR) and Gradle 9.x.
     kotlin("jvm") version "2.3.0"
     kotlin("plugin.serialization") version "2.3.0"
-    id("com.diffplug.spotless") version "7.0.2"
+    id("com.diffplug.spotless") version "8.8.0"
     application
 }
 
