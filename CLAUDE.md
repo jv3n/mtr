@@ -52,6 +52,7 @@ Flux : watchlist (univers de tickers) → quotes temps réel (WebSocket Massive)
   - ⚠️ **Tier gratuit = J-1 / différé 15 min, pas de temps réel** (5 req/min). Inutilisable pour la détection intraday → le live exige un abonnement **Stocks temps réel payant**. En dev, pointer `MASSIVE_WS_URL` sur `wss://delayed.massive.com/stocks`.
 - **Moteur** : **abandonné (plus de Nautilus)**. Bot **custom en Kotlin** — boucle de décision maison (`strategy → risk → order`). Le backtest (seul vrai atout de Nautilus) a peu de valeur ici (pas d'historique de locates). L'autonomie vient de la boucle, pas d'un framework (voir section « Note moteur » plus bas).
 - **Watchlist / univers** : le bot lit son univers de tickers dans `data/watchlist.json` (fallback : `data/watchlist.example.json`). Vu la nouvelle direction **« zéro intervention »**, le vrai objectif est un **scanner autonome** qui choisit les tickers lui-même (à construire) → hands-off total. L'ancienne idée d'**UI web** de sélection manuelle devient **optionnelle / dépriorisée**. En attendant le scanner, l'univers est un JSON fourni une fois.
+- **Pattern d'entrée : GUS** (`docs/pattern/gus.md`) — le **gap overnight** qualifie le trade, pas le mouvement depuis l'ouverture. ⚠️ Distinction structurante, à ne pas re-confondre (c'était le bug de #15) : sur un gap-and-fade le prix repasse **sous** l'ouverture, donc `pctChange` devient négatif alors que le gap qui qualifie reste à +80 %. Trois grandeurs distinctes coexistent : `MarketSnapshot.gapPct` (ouverture vs clôture veille — **le** critère), `dayChangePct` (prix courant vs clôture veille), `TickerState.pctChange` (depuis l'ouverture, purement informatif). Le gap est calculé depuis `day.o` + `prevDay.c` du snapshot Massive (aucun appel supplémentaire) ; avant 9h30 il retombe sur le dernier print pre-market et est marqué **provisoire**. Un gap **inconnu** (`null`) ne déclenche jamais de short. Sorties encore génériques (stop/TP/temps) → alignement sur le pattern = #16.
 - **Dépendances** : gérées par **Gradle** (`build.gradle.kts`). Ktor client · kotlinx-serialization · kotlinx-coroutines · dotenv-kotlin · slf4j-simple.
 - **Secrets** : clés API jamais en dur. Local = `.env` (git-ignoré) via dotenv-kotlin ; prod = **GCP Secret Manager** → variables d'env.
 
@@ -60,7 +61,7 @@ Flux : watchlist (univers de tickers) → quotes temps réel (WebSocket Massive)
 ```
 src/main/kotlin/mtr/
   Main.kt                 # boucle autonome (quote → gestion sortie / entrée short) + log P&L
-  Strategy.kt             # détection du dump + règles de sortie (stop/TP) + StrategyParams
+  Strategy.kt             # détection GUS (gap) + règles de sortie (stop/TP) + StrategyParams
   Watchlist.kt            # charge et valide le JSON du jour
   TradeZeroConnector.kt   # exécution + locates + P&L (Ktor REST) — schémas validés en paper
   MarketData.kt           # MassiveProvider : REST reference + WebSocket agrégats (interface MarketDataProvider)

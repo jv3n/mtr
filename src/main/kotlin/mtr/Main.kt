@@ -66,7 +66,15 @@ fun main() =
         val tickers = watchlist.map { it.ticker }
         log("Universe: $tickers")
 
-        val states = tickers.associateWith { TickerState(it) }
+        // The gap is a scan-time fact, so it travels with the universe into each state.
+        val states = watchlist.associate { it.ticker to TickerState(it.ticker, gapPct = it.gapPct) }
+        val ungapped = watchlist.filter { it.gapPct == null }.map { it.ticker }
+        if (ungapped.isNotEmpty()) {
+            log(
+                "WARNING: no gap data for $ungapped — these cannot produce a short signal (#15). " +
+                    "Add \"gap_pct\" to the watchlist entry, or let the scanner build the universe.",
+            )
+        }
         val openShorts = mutableMapOf<String, OpenShort>()
         val haltFlagged = mutableSetOf<String>()
 

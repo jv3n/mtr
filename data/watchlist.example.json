@@ -1,7 +1,7 @@
 {
   "date": "2026-07-21",
   "tickers": [
-    { "ticker": "ABCD", "note": "gap +80% pre-market, low float", "max_short_size_usd": 1500 },
-    { "ticker": "WXYZ", "note": "dilution news, halted yesterday" }
+    { "ticker": "ABCD", "note": "gap +80% pre-market, low float", "max_short_size_usd": 1500, "gap_pct": 0.8 },
+    { "ticker": "WXYZ", "note": "no gap_pct: tracked, but can never trigger a short (#15)" }
   ]
 }

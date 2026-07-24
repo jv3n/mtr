@@ -23,6 +23,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import java.time.LocalDate
 
 /**
  * Market data provider — SEPARATE from TradeZero (which has no market data).
@@ -41,10 +42,17 @@ data class Quote(
     val dayHigh: Double,
 )
 
-/** Static/reference data (float proxy, market cap) for the watchlist UI. */
+/** Static/reference data for one ticker. */
 data class TickerReference(
     val ticker: String,
-    val floatShares: Long? = null,
+    /**
+     * ⚠️ SHARES OUTSTANDING, **not** the free float — Massive publishes no float.
+     *
+     * Outstanding ≥ float always, so this is an UPPER BOUND and nothing more: a low value
+     * rules a ticker out for certain, a high one does NOT rule it in. GUS reads the real
+     * float off Yahoo Statistics (`docs/pattern/gus.md`), which we have no feed for.
+     */
+    val sharesOutstanding: Long? = null,
     val marketCapUsd: Double? = null,
 )
 
@@ -52,9 +60,34 @@ data class TickerReference(
 data class MarketSnapshot(
     val ticker: String,
     val price: Double,
-    val dayChangePct: Double, // fraction: 0.25 = +25%
+    val dayChangePct: Double, // fraction vs the previous close: 0.25 = +25% ON THE DAY
     val volume: Long,
-)
+    val dayOpen: Double = 0.0, // 0 until the session opens (pre-market scan)
+    val prevClose: Double = 0.0,
+) {
+    /**
+     * GUS criterion #2 — the overnight gap: `(open − previous close) / previous close`.
+     *
+     * This is NOT [dayChangePct] (current price vs previous close) and NOT the move since
+     * the open. On a gap-and-fade — the setup we short — the three diverge hard: a ticker
+     * can gap +80 %, fade all morning, and show a *negative* move since the open while the
+     * gap that qualifies it stays +80 %.
+     *
+     * Before the open there is no `day.o` yet, so we fall back to the last pre-market
+     * print, which is what a 7 a.m. scan can actually see; [gapIsProvisional] flags it,
+     * since the real gap is only fixed at 9:30.
+     */
+    val gapPct: Double
+        get() =
+            when {
+                prevClose <= 0.0 -> 0.0
+                dayOpen > 0.0 -> (dayOpen - prevClose) / prevClose
+                else -> (price - prevClose) / prevClose
+            }
+
+    /** True when [gapPct] comes from a pre-market print rather than the official open. */
+    val gapIsProvisional: Boolean get() = prevClose > 0.0 && dayOpen <= 0.0
+}
 
 /**
  * FINRA short interest for one ticker, as of [settlementDate].
@@ -86,6 +119,15 @@ interface MarketDataProvider {
      * `docs/market-data-benchmark.md`.
      */
     suspend fun getShortInterest(tickers: List<String>): Map<String, ShortInterest>
+
+    /**
+     * GUS criterion #7 — tickers among [tickers] that ran a reverse split on or after
+     * [since]. Returns only the offenders, so an empty set means "none of them did".
+     */
+    suspend fun getRecentReverseSplits(
+        tickers: List<String>,
+        since: LocalDate,
+    ): Set<String>
 
     fun streamQuotes(tickers: List<String>): Flow<Quote>
 }
@@ -134,7 +176,7 @@ class MassiveProvider(
                 ?: res?.get("weighted_shares_outstanding")?.jsonPrimitive?.longOrNull
         return TickerReference(
             ticker = ticker,
-            floatShares = shares,
+            sharesOutstanding = shares,
             marketCapUsd = res?.get("market_cap")?.jsonPrimitive?.doubleOrNull,
         )
     }
@@ -154,8 +196,59 @@ class MassiveProvider(
                 (t["lastTrade"]?.jsonObject?.get("p") ?: day?.get("c"))?.jsonPrimitive?.doubleOrNull ?: 0.0
             val volume = day?.get("v")?.jsonPrimitive?.longOrNull ?: 0L
             val changePct = (t["todaysChangePerc"]?.jsonPrimitive?.doubleOrNull ?: 0.0) / 100.0
-            MarketSnapshot(ticker, price, changePct, volume)
+            // day.o and prevDay.c are already in this payload -> the gap costs no extra call.
+            MarketSnapshot(
+                ticker = ticker,
+                price = price,
+                dayChangePct = changePct,
+                volume = volume,
+                dayOpen = day?.get("o")?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                prevClose =
+                    t["prevDay"]
+                        ?.jsonObject
+                        ?.get("c")
+                        ?.jsonPrimitive
+                        ?.doubleOrNull ?: 0.0,
+            )
         }
+    }
+
+    /**
+     * One batched request (`ticker.any_of` + `execution_date.gte`) for the whole universe —
+     * the Basic plan allows only 5 requests/minute.
+     *
+     * A reverse split is `split_to < split_from` (a 1-for-10 comes back as from=10, to=1).
+     * That ratio IS the definition, so it decides; `adjustment_type` is only the fallback
+     * for a row that omits the ratio.
+     */
+    override suspend fun getRecentReverseSplits(
+        tickers: List<String>,
+        since: LocalDate,
+    ): Set<String> {
+        if (tickers.isEmpty()) return emptySet()
+        val results =
+            client
+                .get("$MASSIVE_REST_BASE/stocks/v1/splits") {
+                    parameter("ticker.any_of", tickers.joinToString(",") { it.uppercase() })
+                    parameter("execution_date.gte", since.toString())
+                    parameter("limit", 1000)
+                }.body<JsonObject>()["results"]
+                ?.jsonArray
+                .orEmpty()
+        return results
+            .mapNotNull { el ->
+                val o = el.jsonObject
+                val t = o["ticker"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val from = o["split_from"]?.jsonPrimitive?.doubleOrNull
+                val to = o["split_to"]?.jsonPrimitive?.doubleOrNull
+                val reverse =
+                    if (from != null && to != null) {
+                        to < from
+                    } else {
+                        o["adjustment_type"]?.jsonPrimitive?.content == "reverse_split"
+                    }
+                t.takeIf { reverse }
+            }.toSet()
     }
 
     /**

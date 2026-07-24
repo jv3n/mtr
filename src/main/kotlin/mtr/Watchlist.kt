@@ -20,6 +20,13 @@ data class WatchlistItem(
     val ticker: String,
     val note: String? = null,
     val maxShortSizeUsd: Double? = null,
+    /**
+     * Overnight gap as a fraction (0.8 = +80 %), the GUS entry qualifier — see
+     * [MarketSnapshot.gapPct]. The scanner fills it in; a hand-written watchlist may set
+     * `gap_pct` explicitly. **Null means unknown, and unknown never qualifies for a short**
+     * (`evaluate` refuses to trade a gap it cannot measure).
+     */
+    val gapPct: Double? = null,
 )
 
 object Watchlist {
@@ -27,7 +34,8 @@ object Watchlist {
 
     /**
      * Expected format:
-     *   {"tickers": [{"ticker": "ABCD", "note": "...", "max_short_size_usd": 1500}, ...]}
+     *   {"tickers": [{"ticker": "ABCD", "note": "...", "max_short_size_usd": 1500,
+     *                 "gap_pct": 0.8}, ...]}
      * or short form: {"tickers": ["ABCD", "WXYZ"]}
      */
     fun load(path: Path): List<WatchlistItem> {
@@ -53,6 +61,7 @@ object Watchlist {
                 ticker = ticker,
                 note = obj["note"]?.jsonPrimitive?.contentOrNull,
                 maxShortSizeUsd = obj["max_short_size_usd"]?.jsonPrimitive?.doubleOrNull,
+                gapPct = obj["gap_pct"]?.jsonPrimitive?.doubleOrNull,
             )
         }
     }

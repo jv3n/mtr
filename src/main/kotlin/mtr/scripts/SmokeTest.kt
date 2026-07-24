@@ -18,7 +18,7 @@ fun main(args: Array<String>) =
         val massive = MassiveProvider.fromEnv()
         try {
             val ref = massive.getReference(ticker)
-            println("  getReference OK  floatShares(proxy)=${ref.floatShares}  marketCap=${ref.marketCapUsd}")
+            println("  getReference OK  sharesOutstanding(float proxy)=${ref.sharesOutstanding}  marketCap=${ref.marketCapUsd}")
         } catch (e: Exception) {
             println("  getReference FAIL  ${e::class.simpleName}: ${e.message}")
         } finally {
