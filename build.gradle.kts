@@ -1,7 +1,7 @@
 plugins {
     // Kotlin 2.3.0: supports Java 25 (IntelliJ JBR) and Gradle 9.x.
-    kotlin("jvm") version "2.3.0"
-    kotlin("plugin.serialization") version "2.3.0"
+    kotlin("jvm") version "2.4.10"
+    kotlin("plugin.serialization") version "2.4.10"
     id("com.diffplug.spotless") version "8.8.0"
     application
 }
@@ -11,10 +11,10 @@ repositories {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
-    val ktor = "3.0.1"
+    val ktor = "3.5.1"
     implementation("io.ktor:ktor-client-core:$ktor")
     implementation("io.ktor:ktor-client-cio:$ktor")
     implementation("io.ktor:ktor-client-content-negotiation:$ktor")
@@ -24,10 +24,10 @@ dependencies {
     implementation("io.ktor:ktor-client-websockets:$ktor")
 
     // .env loader (local dev); prod injects real env vars.
-    implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
+    implementation("io.github.cdimascio:dotenv-kotlin:6.5.1")
 
     // Tiny SLF4J backend for Ktor's logging (avoids logback's logback.xml CVEs).
-    implementation("org.slf4j:slf4j-simple:2.0.16")
+    implementation("org.slf4j:slf4j-simple:2.0.18")
 
     testImplementation(kotlin("test"))
 }
