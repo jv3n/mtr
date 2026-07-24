@@ -3,8 +3,11 @@
 version: 2
 
 updates:
-  # --- JVM dependencies + Gradle plugin versions (build.gradle.kts) ---
-  # Note: Dependabot does NOT update the Gradle wrapper itself (9.3.0) -> still manual.
+  # --- JVM dependencies + Gradle plugin versions + the Gradle wrapper itself ---
+  # Verified on the first run: the wrapper IS bumped (gradlew, gradlew.bat, the jar and
+  # gradle-wrapper.properties), and the Ktor version behind `val ktor = "..."` is resolved.
+  # Watch the wrapper PRs: regenerating gradlew.bat rewrites its line endings, and
+  # .gitattributes (* text=auto eol=lf) must win -> see the "Fins de ligne" note in CLAUDE.md.
   - package-ecosystem: gradle
     directory: /
     schedule:
