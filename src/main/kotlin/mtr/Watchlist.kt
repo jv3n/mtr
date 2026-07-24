@@ -27,6 +27,10 @@ data class WatchlistItem(
      * (`evaluate` refuses to trade a gap it cannot measure).
      */
     val gapPct: Double? = null,
+    /** Previous session's close — the Rule 201 reference carried into [TickerState]. */
+    val prevClose: Double = 0.0,
+    /** Reg SHO SSR, inherited from the previous session or already tripped at scan time. */
+    val ssrActive: Boolean = false,
 )
 
 object Watchlist {

@@ -14,7 +14,6 @@ import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import kotlin.math.floor
 
 /**
  * Orchestration / autonomous paper-trading loop.
@@ -35,6 +34,8 @@ private data class OpenShort(
     val entryPrice: Double,
     val shares: Int,
     val entryMs: Long,
+    /** Best the trade has ever been (a short profits as price falls) — anchors the trail. */
+    var lowestPrice: Double,
 )
 
 private val KILL_FILE: Path = Path.of("KILL")
@@ -46,7 +47,14 @@ fun main() =
         val creds = TradeZeroCredentials.fromEnv()
         if (creds.environment.isLive) log("WARNING: LIVE ENVIRONMENT — real money.")
 
-        val params = StrategyParams()
+        // ENTRY_CUTOFF stops NEW positions; SESSION_END below flattens the book. Two
+        // different moments — sharing one setting was the bug #16 called out.
+        val params =
+            StrategyParams(
+                entryCutoff = envOrNull("ENTRY_CUTOFF")?.let { LocalTime.parse(it) } ?: StrategyParams().entryCutoff,
+            )
+        // The cutoff is a New York rule, so it does not follow SESSION_TZ if that is set elsewhere.
+        val entryZone = ZoneId.of(envOrNull("ENTRY_TZ") ?: "America/New_York")
         val risk = RiskManager(RiskLimits())
         val journal = TradeJournal()
         val notifier = notifierFromEnv()
@@ -66,8 +74,20 @@ fun main() =
         val tickers = watchlist.map { it.ticker }
         log("Universe: $tickers")
 
-        // The gap is a scan-time fact, so it travels with the universe into each state.
-        val states = watchlist.associate { it.ticker to TickerState(it.ticker, gapPct = it.gapPct) }
+        // Gap, previous close and SSR are scan-time facts: they travel into each state.
+        val states =
+            watchlist.associate {
+                it.ticker to
+                    TickerState(
+                        ticker = it.ticker,
+                        gapPct = it.gapPct,
+                        prevClose = it.prevClose,
+                        ssrInherited = it.ssrActive,
+                    )
+            }
+        watchlist.filter { it.ssrActive }.map { it.ticker }.takeIf { it.isNotEmpty() }?.let {
+            log("SSR active on $it — shortable uptick-only, sized down ${params.ssrSizeMultiplier}x")
+        }
         val ungapped = watchlist.filter { it.gapPct == null }.map { it.ticker }
         if (ungapped.isNotEmpty()) {
             log(
@@ -132,7 +152,7 @@ fun main() =
                         market.streamQuotes(tickers).collect { q ->
                             val state = states[q.ticker] ?: return@collect
                             updateState(state, q, System.currentTimeMillis())
-                            onQuote(state, tz, risk, account, params, openShorts, journal)
+                            onQuote(state, tz, risk, account, params, openShorts, journal, LocalTime.now(entryZone))
                         }
                     }.onFailure {
                         streamFailures++
@@ -166,6 +186,10 @@ private fun updateState(
     if (q.dayOpen > 0) s.dayOpen = q.dayOpen
     s.dayHigh = maxOf(s.dayHigh, q.dayHigh)
     if (s.dayOpen > 0) s.pctChange = (q.price - s.dayOpen) / s.dayOpen
+    // Rule 201 can arm mid-session, and once armed it holds for the day.
+    if (!s.ssrTrippedToday && ssrTriggered(q.price, s.prevClose)) {
+        s.ssrTrippedToday = true
+    }
 }
 
 private suspend fun onQuote(
@@ -176,14 +200,16 @@ private suspend fun onQuote(
     params: StrategyParams,
     openShorts: MutableMap<String, OpenShort>,
     journal: TradeJournal,
+    nowNewYork: LocalTime,
 ) {
     val ticker = state.ticker
     val open = openShorts[ticker]
 
-    // 1. Manage an existing short: stop-loss / take-profit / time stop.
+    // 1. Manage an existing short: stop-loss / take-profit / trailing / time stop.
     if (open != null) {
+        if (state.lastPrice > 0.0) open.lowestPrice = minOf(open.lowestPrice, state.lastPrice)
         val heldSeconds = (System.currentTimeMillis() - open.entryMs) / 1000
-        val exit = shouldExit(open.entryPrice, state.lastPrice, heldSeconds, params)
+        val exit = shouldExit(open.entryPrice, state.lastPrice, heldSeconds, open.lowestPrice, params)
         if (exit != ExitReason.NONE) {
             val result =
                 runCatching { tz.flatten(account, ticker) }
@@ -205,11 +231,13 @@ private suspend fun onQuote(
 
     // 2. No position: look for a new short entry.
     if (risk.halted) return
+    // Entries stop before the close; exits above are deliberately NOT gated by this.
+    if (!entriesAllowedAt(nowNewYork, params)) return
     val signal = evaluate(state, params)
     if (signal.type != SignalType.SHORT) return
 
     if (state.lastPrice <= 0) return
-    val shares = floor(params.perTradeUsd / state.lastPrice).toInt()
+    val shares = shareCount(state.lastPrice, state.ssrActive, params)
     if (shares < 1) return
     val notional = shares * state.lastPrice
 
@@ -237,7 +265,13 @@ private suspend fun onQuote(
             .onFailure { log("submitShort $ticker failed: ${it.message}") }
             .getOrNull()
     if (result?.accepted == true) {
-        openShorts[ticker] = OpenShort(entryPrice = state.lastPrice, shares = shares, entryMs = System.currentTimeMillis())
+        openShorts[ticker] =
+            OpenShort(
+                entryPrice = state.lastPrice,
+                shares = shares,
+                entryMs = System.currentTimeMillis(),
+                lowestPrice = state.lastPrice,
+            )
         risk.registerFill(ticker, notional)
         journal.recordEntry(ticker, TradeSide.SHORT, shares, state.lastPrice, signal.reason)
         log("ENTER SHORT $ticker x$shares @ ${state.lastPrice} (${signal.reason})")

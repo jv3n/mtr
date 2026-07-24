@@ -61,10 +61,12 @@ class StrategyTest {
 
     @Test
     fun `exit short on take profit, stop loss and time`() {
-        // entry 10.0, take-profit 10% → price 9.0; stop-loss 5% → price 10.5
+        // entry 10.0, take-profit 10% → price 9.0; stop-loss 11% → price 11.10
         assertEquals(ExitReason.TAKE_PROFIT, shouldExit(10.0, 9.0, heldSeconds = 0))
-        assertEquals(ExitReason.STOP_LOSS, shouldExit(10.0, 10.5, heldSeconds = 0))
+        assertEquals(ExitReason.STOP_LOSS, shouldExit(10.0, 11.20, heldSeconds = 0))
         assertEquals(ExitReason.NONE, shouldExit(10.0, 9.8, heldSeconds = 0))
+        // a 5% adverse move no longer stops the trade out — that is the point of #16
+        assertEquals(ExitReason.NONE, shouldExit(10.0, 10.5, heldSeconds = 0))
         // held past maxHoldSeconds (default 1800) with no stop/TP → time stop
         assertEquals(ExitReason.TIME, shouldExit(10.0, 9.8, heldSeconds = 2000))
     }

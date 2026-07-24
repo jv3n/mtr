@@ -82,6 +82,10 @@ fun filterCandidates(
                         it.volume,
                     ),
                 gapPct = it.gapPct,
+                prevClose = it.prevClose,
+                // Intraday arming, known already at scan time; the inherited case is added
+                // by applySsr() because it needs a separate data source.
+                ssrActive = ssrTriggered(it.dayLow, it.prevClose),
             )
         }
 
@@ -118,6 +122,20 @@ fun applyReverseSplitFilter(
 ): List<WatchlistItem> = candidates.filterNot { it.ticker in reverseSplitTickers }
 
 /**
+ * Marks candidates carrying an inherited SSR, on top of whatever intraday arming
+ * [filterCandidates] already saw. Nothing is dropped: under Rule 201 shorting is still
+ * allowed, uptick-only, so SSR costs size (see [shareCount]) rather than the trade. Pure.
+ */
+fun applySsr(
+    candidates: List<WatchlistItem>,
+    inheritedSsr: Set<String>,
+): List<WatchlistItem> =
+    candidates.map { item ->
+        val ssr = item.ssrActive || item.ticker in inheritedSsr
+        if (!ssr) item else item.copy(ssrActive = true, note = "${item.note.orEmpty()} · SSR".trim())
+    }
+
+/**
  * Squeeze guard. Annotates each candidate with its short interest and drops those above
  * `criteria.maxDaysToCover`. Pure (no I/O) → unit-testable.
  *
@@ -150,7 +168,7 @@ class Scanner(
     private val criteria: ScanCriteria = ScanCriteria(),
 ) {
     /**
-     * Gainers → gap/price/volume band → float band → reverse splits → squeeze guard.
+     * Gainers → gap/price/volume band → float band → reverse splits → SSR → squeeze guard.
      *
      * Every enrichment step is best-effort: a data source that fails degrades the scan to
      * the filters that did work rather than sinking it, and says so in the log.
@@ -170,6 +188,12 @@ class Scanner(
             log("every candidate had a recent reverse split")
             return candidates
         }
+
+        val inheritedSsr =
+            runCatching { provider.getInheritedSsr(candidates.map { it.ticker }) }
+                .onFailure { log("SSR lookup failed (${it.message}) — sizing will not know about SSR") }
+                .getOrDefault(emptySet())
+        candidates = applySsr(candidates, inheritedSsr)
 
         // Short interest must never sink a scan: on failure we trade on the gainers alone.
         val shortInterest =

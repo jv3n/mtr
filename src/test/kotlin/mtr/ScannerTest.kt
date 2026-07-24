@@ -106,6 +106,44 @@ class ScannerTest {
     }
 
     @Test
+    fun `flags an inherited SSR without dropping the candidate`() {
+        // Rule 201 restricts shorting to upticks, it does not forbid it: the trade survives
+        // and pays for the red flag in size instead (see shareCount).
+        val result = applySsr(listOf(WatchlistItem("A", note = "gap +80%")), setOf("A"))
+        assertEquals(listOf("A"), result.map { it.ticker })
+        assertTrue(result.single().ssrActive)
+        assertTrue(result.single().note!!.contains("SSR"))
+    }
+
+    @Test
+    fun `keeps an SSR already armed intraday even if the inherited set is empty`() {
+        val result = applySsr(listOf(WatchlistItem("A", ssrActive = true)), emptySet())
+        assertTrue(result.single().ssrActive)
+    }
+
+    @Test
+    fun `leaves candidates with no SSR untouched`() {
+        val result = applySsr(listOf(WatchlistItem("A", note = "gap +80%")), setOf("OTHER"))
+        assertEquals(false, result.single().ssrActive)
+        assertEquals("gap +80%", result.single().note)
+    }
+
+    @Test
+    fun `arms SSR at scan time when the session low is ten percent under the previous close`() {
+        val crashed =
+            MarketSnapshot(
+                ticker = "A",
+                price = 3.0,
+                dayChangePct = 0.50,
+                volume = 1_000_000,
+                dayOpen = 3.6,
+                prevClose = 2.0,
+                dayLow = 1.75, // 12.5% below the 2.00 close → Rule 201 armed
+            )
+        assertTrue(filterCandidates(listOf(crashed)).single().ssrActive)
+    }
+
+    @Test
     fun `drops candidates that ran a recent reverse split`() {
         val candidates = listOf(WatchlistItem("A"), WatchlistItem("RS"), WatchlistItem("B"))
         val result = applyReverseSplitFilter(candidates, setOf("RS"))

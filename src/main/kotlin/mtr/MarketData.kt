@@ -24,6 +24,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * Market data provider — SEPARATE from TradeZero (which has no market data).
@@ -64,6 +65,7 @@ data class MarketSnapshot(
     val volume: Long,
     val dayOpen: Double = 0.0, // 0 until the session opens (pre-market scan)
     val prevClose: Double = 0.0,
+    val dayLow: Double = 0.0, // session low so far — arms SSR intraday (see ssrTriggered)
 ) {
     /**
      * GUS criterion #2 — the overnight gap: `(open − previous close) / previous close`.
@@ -88,6 +90,12 @@ data class MarketSnapshot(
     /** True when [gapPct] comes from a pre-market print rather than the official open. */
     val gapIsProvisional: Boolean get() = prevClose > 0.0 && dayOpen <= 0.0
 }
+
+/** One session's low and close — the two numbers Rule 201 needs. */
+private data class DailyBar(
+    val low: Double,
+    val close: Double,
+)
 
 /**
  * FINRA short interest for one ticker, as of [settlementDate].
@@ -129,6 +137,21 @@ interface MarketDataProvider {
         since: LocalDate,
     ): Set<String>
 
+    /**
+     * Tickers among [tickers] carrying a Reg SHO Rule 201 short-sale restriction INHERITED
+     * from the previous session (SSR runs the day it trips plus the whole next day).
+     *
+     * ⚠️ Neither TradeZero nor Massive publishes SSR state — verified against both API
+     * catalogues, 2026-07-23. TradeZero only exposes easy-to-borrow plus, indirectly via
+     * locate types, the Reg SHO *threshold* list, which is a different rule (fails to
+     * deliver, not the −10 % circuit breaker). So we derive it from the rule itself.
+     *
+     * The inherited case is the one that matters here: our universe gaps UP 50 %+, so
+     * tripping SSR intraday would mean handing back the entire gap and more — rare. TRIB,
+     * the worked example in `docs/pattern/dt.md`, was in SSR inherited from the day before.
+     */
+    suspend fun getInheritedSsr(tickers: List<String>): Set<String>
+
     fun streamQuotes(tickers: List<String>): Flow<Quote>
 }
 
@@ -140,6 +163,11 @@ class MassiveProvider(
         // New hostnames (old api.polygon.io / socket.polygon.io still work for a while).
         const val MASSIVE_WS_REALTIME = "wss://socket.massive.com/stocks"
         const val MASSIVE_REST_BASE = "https://api.massive.com"
+
+        private val NEW_YORK: ZoneId = ZoneId.of("America/New_York")
+
+        /** Enough calendar days to clear a weekend plus a holiday and still find 2 sessions. */
+        private const val MAX_SESSION_PROBES = 7
 
         fun fromEnv(): MassiveProvider {
             val key = envOrNull("MASSIVE_API_KEY") ?: envOrNull("POLYGON_API_KEY")
@@ -209,8 +237,63 @@ class MassiveProvider(
                         ?.get("c")
                         ?.jsonPrimitive
                         ?.doubleOrNull ?: 0.0,
+                dayLow = day?.get("l")?.jsonPrimitive?.doubleOrNull ?: 0.0,
             )
         }
+    }
+
+    /**
+     * Walks back through grouped daily bars to find the last two sessions, then applies
+     * Rule 201 to the previous one: low ≤ 90 % of the session close before it.
+     *
+     * Two calls on a weekday, three or four across a weekend or a holiday — a non-trading
+     * date simply comes back with no results, which is how we recognise it. Cheap enough
+     * for the 5 requests/minute of the Basic plan, and it runs once, at scan time.
+     */
+    override suspend fun getInheritedSsr(tickers: List<String>): Set<String> {
+        if (tickers.isEmpty()) return emptySet()
+        val wanted = tickers.map { it.uppercase() }.toSet()
+        val sessions = mutableListOf<Map<String, DailyBar>>()
+        // Market days, so New York — a UTC host would roll the date over hours too early.
+        var date = LocalDate.now(NEW_YORK).minusDays(1)
+        var probes = 0
+        while (sessions.size < 2 && probes < MAX_SESSION_PROBES) {
+            groupedDaily(date, wanted)?.let { sessions += it }
+            date = date.minusDays(1)
+            probes++
+        }
+        if (sessions.size < 2) return emptySet()
+        val previous = sessions[0]
+        val before = sessions[1]
+        return wanted
+            .filter { ticker ->
+                val low = previous[ticker]?.low ?: return@filter false
+                val reference = before[ticker]?.close ?: return@filter false
+                ssrTriggered(low, reference)
+            }.toSet()
+    }
+
+    /** Null when [date] was not a trading day (no results published). */
+    private suspend fun groupedDaily(
+        date: LocalDate,
+        wanted: Set<String>,
+    ): Map<String, DailyBar>? {
+        val results =
+            client
+                .get("$MASSIVE_REST_BASE/v2/aggs/grouped/locale/us/market/stocks/$date") {
+                    parameter("adjusted", "true")
+                }.body<JsonObject>()["results"]
+                ?.jsonArray
+                .orEmpty()
+        if (results.isEmpty()) return null
+        return results
+            .mapNotNull { el ->
+                val o = el.jsonObject
+                val ticker = o["T"]?.jsonPrimitive?.content?.takeIf { it in wanted } ?: return@mapNotNull null
+                val low = o["l"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+                val close = o["c"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+                ticker to DailyBar(low, close)
+            }.toMap()
     }
 
     /**
