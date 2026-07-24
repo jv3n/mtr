@@ -1,0 +1,63 @@
+# Automated dependency updates. See issue #18.
+# The CI workflow (spotlessCheck + build) gates every PR opened here.
+version: 2
+
+updates:
+  # --- JVM dependencies + Gradle plugin versions (build.gradle.kts) ---
+  # Note: Dependabot does NOT update the Gradle wrapper itself (9.3.0) -> still manual.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    # `build(deps): bump ...` — the commit-msg hook enforces Conventional Commits.
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      # One PR for everything low-risk; majors stay separate, they need a decision
+      # (JDK 26, Ktor 4, Kotlin 3 ...).
+      gradle-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # --- Actions pinned in ci.yml / docker.yml ---
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # --- Base images: Dockerfile (build + runtime stages) and docker-compose.yml ---
+  # A major eclipse-temurin bump also means jvmToolchain() and the CI java-version:
+  # treat it as a migration, not a merge.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      docker-minor-patch:
+        update-types:
+          - minor
+          - patch

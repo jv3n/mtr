@@ -110,6 +110,7 @@ L'autonomie du bot vient de la **boucle de décision** (`strategy → risk → o
 - **Spotless (ktlint)** : `./gradlew spotlessApply` pour formater, `spotlessCheck` (inclus dans `check`/`build`) pour vérifier. Style ktlint officiel via `.editorconfig` (`max-line-length` désactivé).
 - **Lefthook** : hook pre-commit (`lefthook.yml`) qui lance `spotlessApply` sur les `.kt/.kts` stagés. Nécessite `lefthook install` une fois (binaire à installer : winget/scoop/npm).
 - **CI** (`.github/workflows/ci.yml`) : sur push/PR → JDK 25 (Temurin) + `chmod +x gradlew` + `./gradlew spotlessCheck build`.
+- **Dependabot** (`.github/dependabot.yml`) : PR hebdo (lundi 7h, Europe/Paris) sur 3 écosystèmes — `gradle` (deps + versions de plugins), `github-actions`, `docker` (images de base du `Dockerfile` + `docker-compose.yml`). Mineures/patch **groupées** en une PR par écosystème, **majeures séparées** (elles demandent une décision : JDK 26, Ktor 4, Kotlin 3…). Préfixes de commit forcés (`build`/`ci`) pour rester en Conventional Commits. ⚠️ Dependabot **ne met pas à jour le wrapper Gradle** (9.3.0) → `./gradlew wrapper --gradle-version=X` à la main.
 - **Pièges déjà réglés** (ne pas re-casser) :
   - **Fins de ligne** : tout en **LF**, forcé par `.gitattributes` (`* text=auto eol=lf`) + `.editorconfig`. IntelliJ sous Windows tend à remettre du CRLF → ktlint casse. Ne jamais retirer le `.gitattributes`.
   - **`gradlew` doit rester exécutable** (`100755` dans git) sinon la CI Linux fait `Permission denied`. Fix : `git update-index --chmod=+x gradlew`.
