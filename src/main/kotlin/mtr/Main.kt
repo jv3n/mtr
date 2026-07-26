@@ -40,6 +40,9 @@ private data class OpenShort(
 
 private val KILL_FILE: Path = Path.of("KILL")
 
+/** Minimum gap between two identical entry signals for the same ticker (anti-spam). */
+private const val SIGNAL_COOLDOWN_MS = 10 * 60 * 1000L
+
 private fun log(msg: String) = println("${Instant.now()} $msg")
 
 fun main() =
@@ -99,6 +102,9 @@ fun main() =
         val haltFlagged = mutableSetOf<String>()
 
         notifier.send("mtr started · $account (${creds.environment}) · universe=$tickers")
+        notifier.send(formatScanDigest(watchlist))
+        // Per-ticker throttle so one setting-off setup doesn't spam identical signals.
+        val signaled = mutableMapOf<String, Long>()
         try {
             coroutineScope {
                 val scopeJob = coroutineContext.job
@@ -152,7 +158,7 @@ fun main() =
                         market.streamQuotes(tickers).collect { q ->
                             val state = states[q.ticker] ?: return@collect
                             updateState(state, q, System.currentTimeMillis())
-                            onQuote(state, tz, risk, account, params, openShorts, journal, LocalTime.now(entryZone))
+                            onQuote(state, tz, risk, account, params, openShorts, journal, notifier, signaled, LocalTime.now(entryZone))
                         }
                     }.onFailure {
                         streamFailures++
@@ -200,6 +206,8 @@ private suspend fun onQuote(
     params: StrategyParams,
     openShorts: MutableMap<String, OpenShort>,
     journal: TradeJournal,
+    notifier: Notifier,
+    signaled: MutableMap<String, Long>,
     nowNewYork: LocalTime,
 ) {
     val ticker = state.ticker
@@ -238,6 +246,17 @@ private suspend fun onQuote(
 
     if (state.lastPrice <= 0) return
     val shares = shareCount(state.lastPrice, state.ssrActive, params)
+
+    // Signal mode: alert on the setup itself, BEFORE the guardrails/borrow gates below —
+    // a name the paper bot can't take (HTB, risk cap) is still one to judge by hand. The
+    // per-ticker cooldown keeps a re-crossing setup from spamming identical messages.
+    val nowMs = System.currentTimeMillis()
+    val lastSignalMs = signaled[ticker]
+    if (lastSignalMs == null || nowMs - lastSignalMs >= SIGNAL_COOLDOWN_MS) {
+        signaled[ticker] = nowMs
+        notifier.send(formatEntrySignal(state, signal, shares, params))
+    }
+
     if (shares < 1) return
     val notional = shares * state.lastPrice
 
