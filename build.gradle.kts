@@ -1,8 +1,8 @@
 plugins {
     // Kotlin 2.3.0: supports Java 25 (IntelliJ JBR) and Gradle 9.x.
-    kotlin("jvm") version "2.4.10"
-    kotlin("plugin.serialization") version "2.4.10"
-    id("com.diffplug.spotless") version "8.9.0"
+    kotlin("jvm") version "2.4.20"
+    kotlin("plugin.serialization") version "2.4.20"
+    id("com.diffplug.spotless") version "8.10.2"
     application
 }
 
@@ -27,7 +27,7 @@ dependencies {
     implementation("io.github.cdimascio:dotenv-kotlin:6.5.1")
 
     // Tiny SLF4J backend for Ktor's logging (avoids logback's logback.xml CVEs).
-    implementation("org.slf4j:slf4j-simple:2.0.18")
+    implementation("org.slf4j:slf4j-simple:2.0.19")
 
     testImplementation(kotlin("test"))
 }
